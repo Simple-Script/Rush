@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Custom Language Interpreter</title>
+    <style>
+        textarea, pre {
+            width: 100%;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <h1>Custom Script Language</h1>
+
+    <textarea id="code" rows="12" placeholder="Write your code here..."></textarea><br>
+    <button onclick="RUN_CODE()">Run</button>
+    <button onclick="LOAD_EXTERNAL()">Load External Code</button>
+    <input id="externalUrl" placeholder="Paste raw GitHub or .txt URL here" style="width: 100%;"><br><br>
+
+    <h3>Output:</h3>
+    <pre id="output"></pre>
+
+    <script>
+        function RUN_CODE(codeText = null) {
+            const code = codeText || document.getElementById("code").value;
+            const output = document.getElementById("output");
+            output.textContent = "";
+
+            let GLOBALS = {};
+            let FUNCTIONS = {};
+
+            const PRINT = val => output.textContent += val + '\n';
+
+            function evaluate(expr, scope = {}) {
+                const allVars = { ...GLOBALS, ...scope };
+                const safeExpr = expr.replace(/\b([a-zA-Z_]\w*)\b/g, name =>
+                    allVars.hasOwnProperty(name) ? JSON.stringify(allVars[name]) : name
+                );
+                return Function(`"use strict"; return (${safeExpr});`)();
+            }
+
+            function RUN(script, scope = {}) {
+                const lines = script.split('\n').map(l => l.trim()).filter(Boolean);
+                let localScope = { ...scope };
+                let i = 0;
+
+                while (i < lines.length) {
+                    let line = lines[i];
+                    if (line.startsWith('//')) { i++; continue; }
+
+                    // FUNC definition
+                    if (line.startsWith('FUNC ')) {
+                        const funcName = line.slice(5).trim();
+                        let funcBody = [];
+                        i++;
+                        while (i < lines.length && lines[i] !== 'END') {
+                            funcBody.push(lines[i]);
+                            i++;
+                        }
+                        FUNCTIONS[funcName] = funcBody.join('\n');
+                        i++; // skip END
+                        continue;
+                    }
+
+                    // SET
+                    if (line.startsWith('SET ')) {
+                        const [, rest] = line.split('SET ');
+                        const [varName, valExpr] = rest.split('=').map(x => x.trim());
+                        localScope[varName] = evaluate(valExpr, localScope);
+                        GLOBALS[varName] = localScope[varName];
+                    }
+
+                    // PRINT
+                    else if (line.startsWith('PRINT ')) {
+                        const content = line.slice(6).trim();
+                        PRINT(content.startsWith('"') ? content.slice(1, -1) : evaluate(content, localScope));
+                    }
+
+                    // IF
+                    else if (line.startsWith('IF ')) {
+                        const condBlock = line.slice(3);
+                        const [condition, thenElse] = condBlock.split('THEN');
+                        const [thenPart, elsePart = ""] = thenElse.split('ELSE');
+                        const result = evaluate(condition.trim(), localScope);
+                        RUN(result ? thenPart.trim() : elsePart.trim(), localScope);
+                    }
+
+                    // LOOP
+                    else if (line.startsWith('LOOP ')) {
+                        const rest = line.slice(5);
+                        const [timesStr, ...actionParts] = rest.split(' ');
+                        const times = parseInt(evaluate(timesStr.trim(), localScope));
+                        const action = actionParts.join(' ');
+                        for (let j = 0; j < times; j++) {
+                            RUN(action, localScope);
+                        }
+                    }
+
+                    // CALL
+                    else if (line.startsWith('CALL ')) {
+                        const name = line.slice(5).trim();
+                        if (FUNCTIONS[name]) RUN(FUNCTIONS[name], {});
+                        else PRINT(`Error: function '${name}' not found.`);
+                    }
+
+                    // RAND
+                    else if (line.startsWith('RAND ')) {
+                        const [_, minStr, __, maxStr, ___, intoVar] = line.split(' ');
+                        const min = parseInt(evaluate(minStr.trim(), localScope));
+                        const max = parseInt(evaluate(maxStr.trim(), localScope));
+                        const rand = Math.floor(Math.random() * (max - min + 1)) + min;
+                        localScope[intoVar] = rand;
+                        GLOBALS[intoVar] = rand;
+                    }
+
+                    // MATH expr INTO var
+                    else if (line.startsWith('MATH ')) {
+                        const parts = line.split(' ');
+                        const intoIndex = parts.indexOf("INTO");
+                        const expr = parts.slice(1, intoIndex).join(" ");
+                        const intoVar = parts[intoIndex + 1];
+                        const val = evaluate(expr, localScope);
+                        localScope[intoVar] = val;
+                        GLOBALS[intoVar] = val;
+                    }
+
+                    // Unknown
+                    else {
+                        PRINT(`Unknown command: ${line}`);
+                    }
+
+                    i++;
+                }
+            }
+
+            try {
+                RUN(code);
+            } catch (e) {
+                output.textContent += "\nError: " + e.message;
+            }
+        }
+
+        async function LOAD_EXTERNAL() {
+            const url = document.getElementById("externalUrl").value.trim();
+            try {
+                const res = await fetch(url);
+                const code = await res.text();
+                document.getElementById("code").value = code;
+                RUN_CODE(code);
+            } catch (e) {
+                document.getElementById("output").textContent = "Failed to load: " + e.message;
+            }
+        }
+    </script>
+</body>
+</html>
